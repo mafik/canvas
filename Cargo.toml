@@ -1,0 +1,11 @@
+[package]
+name = "canvas"
+version = "0.1.0"
+authors = ["Marek Rogalski <mafikpl@gmail.com>"]
+
+[dependencies]
+hyper = "0.11"
+futures = "0.1"
+lazy_static = "0.2.8"
+websocket = "0.20"
+tokio-core = "0.1"
