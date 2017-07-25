@@ -1,7 +1,4 @@
-// TODO:
-
 extern crate websocket;
-extern crate tokio_core;
 
 mod http_server;
 mod api;
