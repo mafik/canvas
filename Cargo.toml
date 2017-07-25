@@ -1,12 +1,12 @@
 [package]
 name = "canvas"
-version = "1.0.0"
+version = "1.0.1"
 authors = ["Marek Rogalski <mafikpl@gmail.com>"]
 description = "2D Canvas API that streams all drawing commands to a connected browser."
 repository = "https://github.com/mafik/canvas"
 
 keywords = ["canvas", "2d", "draw", "render", "webcanvas"]
-categories = ["rendering::graphics-api", "rendering", "gui", "web-programming::websocket"]
+categories = ["rendering::graphics-api", "gui", "web-programming::websocket", "visualization", "api-bindings"]
 license = "Apache-2.0"
 
 [dependencies]
