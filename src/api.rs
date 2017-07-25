@@ -1,5 +1,6 @@
 use std::fmt;
 use std::ascii::AsciiExt;
+use std::sync::mpsc::Receiver;
 
 macro_rules! lowercase_display {
     ($T:ty) => {
@@ -17,6 +18,12 @@ pub struct TextMetrics {
 
 pub enum Event {
     Resized(f64, f64),
+    MouseMove(f64, f64),
+    MouseDown(f64, f64, u32),
+    MouseUp(f64, f64, u32),
+    MouseWheel(f64, f64),
+    KeyDown { code: String, key: String },
+    KeyUp { code: String, key: String },
 }
 
 #[derive(Debug)]
@@ -70,7 +77,7 @@ pub trait Canvas {
 
     fn fillText(&mut self, text: &str, x: f64, y: f64);
     fn strokeText(&mut self, text: &str, x: f64, y: f64);
-    fn measureText(&mut self, text: &str) -> Box<Iterator<Item=TextMetrics>>;
+    fn measureText(&mut self, text: &str) -> TextMetrics;
 
     fn lineWidth(&mut self, width: f64);
     fn lineCap(&mut self, lineCap: LineCap);
@@ -125,4 +132,6 @@ pub trait Canvas {
 
     fn save(&mut self);
     fn restore(&mut self);
+
+    fn events(&self) -> &Receiver<Event>;
 }

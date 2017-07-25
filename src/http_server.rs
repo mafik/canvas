@@ -9,7 +9,7 @@ use self::hyper::{StatusCode, Method};
 
 #[derive(Clone)]
 struct Server {
-    html: String
+    html: String,
 }
 
 impl Service for Server {
@@ -38,13 +38,16 @@ impl Service for Server {
     }
 }
 
-use ::std::net::SocketAddr;
+use std::net::SocketAddr;
 
 pub(crate) fn start(addr: SocketAddr, html: String) {
     thread::spawn(move || {
         let server = Server { html };
         let server = Http::new().bind(&addr, move || Ok(server.clone())).unwrap();
-        println!("Started HTTP server on {}", server.local_addr().unwrap());
+        println!(
+            "HTTP server running on http://{}",
+            server.local_addr().unwrap()
+        );
         server.run().unwrap();
     });
 }
