@@ -8,7 +8,7 @@ mod api;
 
 use std::net::SocketAddr;
 use std::iter::Iterator;
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use websocket::sync::Server;
 use websocket::OwnedMessage;
@@ -228,13 +228,13 @@ fn make_html(sync_addr: SocketAddr, async_addr: SocketAddr) -> String {
 
 impl WebCanvas {
     pub fn start(http_addr: SocketAddr) -> WebCanvas {
-        let (mut sync_server, sync_addr) = start_ws_server();
-        let (mut async_server, async_addr) = start_ws_server();
+        let (sync_server, sync_addr) = start_ws_server();
+        let (async_server, async_addr) = start_ws_server();
 
         let html = make_html(sync_addr, async_addr);
         http_server::start(http_addr, html);
 
-        let (mut client, ip) = accept_one(sync_server);
+        let (client, ip) = accept_one(sync_server);
         println!("Connection from {}", ip);
 
         let (mut aclient, _) = accept_one(async_server);
