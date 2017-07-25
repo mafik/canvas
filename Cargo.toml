@@ -20,3 +20,4 @@ appveyor = { repository = "mafik/canvas" }
 is-it-maintained-issue-resolution = { repository = "mafik/canvas" }
 is-it-maintained-open-issues = { repository = "mafik/canvas" }
 coveralls = { repository = "mafik/canvas" }
+
