@@ -1,6 +1,3 @@
-extern crate futures;
-
-use self::futures::BoxFuture;
 use std::fmt;
 use std::ascii::AsciiExt;
 
@@ -16,6 +13,10 @@ macro_rules! lowercase_display {
 
 pub struct TextMetrics {
     pub width: f64,
+}
+
+pub enum Event {
+    Resized(f64, f64),
 }
 
 #[derive(Debug)]
@@ -69,7 +70,7 @@ pub trait Canvas {
 
     fn fillText(&mut self, text: &str, x: f64, y: f64);
     fn strokeText(&mut self, text: &str, x: f64, y: f64);
-    fn measureText(&mut self, text: &str) -> BoxFuture<TextMetrics, ()>;
+    fn measureText(&mut self, text: &str) -> Box<Iterator<Item=TextMetrics>>;
 
     fn lineWidth(&mut self, width: f64);
     fn lineCap(&mut self, lineCap: LineCap);

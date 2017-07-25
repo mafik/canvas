@@ -7,13 +7,10 @@ use self::hyper::header::ContentLength;
 use self::hyper::server::{Http, Request, Response, Service};
 use self::hyper::{StatusCode, Method};
 
-const HEADER: &'static str = include_str!("static/index.html");
-const SCRIPT: &'static str = include_str!("static/script.js");
-lazy_static! {
-    static ref HTML: String = format!("{}<script>{}</script>", HEADER, SCRIPT);
+#[derive(Clone)]
+struct Server {
+    html: String
 }
-
-struct Server;
 
 impl Service for Server {
     type Request = Request;
@@ -25,11 +22,11 @@ impl Service for Server {
         let (status, content) = match req.method() {
             &Method::Get => {
                 match req.uri().as_ref() {
-                    "/" => (StatusCode::Ok, HTML.as_bytes()),
-                    _ => (StatusCode::NotFound, b"404" as &[u8]),
+                    "/" => (StatusCode::Ok, self.html.clone()),
+                    _ => (StatusCode::NotFound, "404".to_string()),
                 }
             }
-            _ => (StatusCode::MethodNotAllowed, b"502" as &[u8]),
+            _ => (StatusCode::MethodNotAllowed, "502".to_string()),
         };
 
         futures::future::ok(
@@ -41,9 +38,12 @@ impl Service for Server {
     }
 }
 
-pub(crate) fn start(addr: ::std::net::SocketAddr) {
+use ::std::net::SocketAddr;
+
+pub(crate) fn start(addr: SocketAddr, html: String) {
     thread::spawn(move || {
-        let server = Http::new().bind(&addr, || Ok(Server)).unwrap();
+        let server = Server { html };
+        let server = Http::new().bind(&addr, move || Ok(server.clone())).unwrap();
         println!("Started HTTP server on {}", server.local_addr().unwrap());
         server.run().unwrap();
     });

@@ -1,37 +1,24 @@
-// TODO: use the right websocket port in the script
-// TODO: implement text measurment
-// TODO: write a bench test (ping-pong)
+// TODO: 
 
-#[macro_use]
-extern crate lazy_static;
 extern crate websocket;
 extern crate tokio_core;
-extern crate futures;
 
-mod server;
+mod http_server;
 mod api;
-mod json_sender;
 
-use std::io;
 use std::net::SocketAddr;
-
-use futures::stream;
-use tokio_core::reactor::Handle;
-use websocket::async::futures::{Stream, BoxFuture, Future, Sink};
+use std::iter::Iterator;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::thread;
+use websocket::sync::Server;
+use websocket::OwnedMessage;
 
 pub use api::*;
-
-trait JsonSender {
-    fn cleared(&mut self);
-    fn send_json(&mut self, json: String);
-    fn measure_text(&mut self, text: &str) -> BoxFuture<TextMetrics, ()>;
-}
 
 #[allow(non_snake_case)]
 impl Canvas for WebCanvas {
     fn clearRect(&mut self, x: f64, y: f64, width: f64, height: f64) {
         self.send_json(format!(r#"["clearRect",{},{},{},{}]"#, x, y, width, height));
-        self.cleared();
     }
     fn fillRect(&mut self, x: f64, y: f64, width: f64, height: f64) {
         self.send_json(format!(r#"["fillRect",{},{},{},{}]"#, x, y, width, height));
@@ -52,8 +39,11 @@ impl Canvas for WebCanvas {
     fn strokeText(&mut self, text: &str, x: f64, y: f64) {
         self.send_json(format!(r#"["strokeText","{}",{},{}]"#, text, x, y));
     }
-    fn measureText(&mut self, text: &str) -> BoxFuture<TextMetrics, ()> {
-        self.measure_text(text)
+    fn measureText(&mut self, text: &str) -> Box<Iterator<Item=TextMetrics>> {
+        self.send_json(format!("[\"measureText\", \"{}\"]", text));
+        return Box::new(self.receive_json().into_iter().map(|text| {
+            return TextMetrics { width: text.parse().unwrap() };
+        }));
     }
 
     fn lineWidth(&mut self, width: f64) {
@@ -199,134 +189,138 @@ impl Canvas for WebCanvas {
 
 pub struct Config {
     pub http_addr: SocketAddr,
-    pub websocket_addr: SocketAddr,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Config {
             http_addr: ([0, 0, 0, 0], 8080).into(),
-            websocket_addr: ([0, 0, 0, 0], 8081).into(),
         }
     }
 }
 
-type Client = websocket::async::Client<websocket::async::TcpStream>;
-
 pub struct WebCanvas {
-    initial_commands: *mut Vec<String>,
-    clients: *mut Vec<Client>,
-    config: Config,
+    sync_tx: Sender<Action>,
+    //ws_rx: Receiver<api::Event>,
+}
+
+enum Action {
+    Send(String),
+    Receive(Sender<String>),
+}
+
+const HEADER: &'static str = include_str!("static/index.html");
+const SCRIPT: &'static str = include_str!("static/script.js");
+type WsServer = websocket::server::WsServer<websocket::server::NoTlsAcceptor, std::net::TcpListener>;
+type WsClient = websocket::sync::Client<std::net::TcpStream>;
+
+fn start_ws_server() -> (WsServer, SocketAddr) {
+    let server = Server::bind("0.0.0.0:0").unwrap();
+    let addr = server.local_addr().unwrap();
+    return (server, addr);
+}
+
+fn accept_one(mut server: WsServer) -> (WsClient, SocketAddr) {
+    let request = server.accept().ok().unwrap();
+    let client = request.accept().unwrap();
+    let ip = client.peer_addr().unwrap();
+    return (client, ip);
+}
+
+fn make_html(sync_addr: SocketAddr, async_addr: SocketAddr) -> String {
+    format!("{}<script>var action_port={},event_port={};{}</script>", 
+            HEADER,
+            sync_addr.port(),
+            async_addr.port(),
+            SCRIPT)
 }
 
 impl WebCanvas {
-    pub fn new(config: Config) -> Self {
-        server::start(config.http_addr);
-        WebCanvas {
-            initial_commands: Box::into_raw(Box::new(Vec::new())),
-            clients: Box::into_raw(Box::new(Vec::new())),
-            config,
-        }
-    }
-    pub fn start(&mut self, handle: &Handle) -> Box<Future<Item = (), Error = ()> + 'static> {
-        let server = websocket::async::Server::bind(self.config.websocket_addr, handle).unwrap();
-        let initial_commands = self.initial_commands;
-        let clients = self.clients;
+    pub fn start(config: Config) -> WebCanvas {
+        let (mut sync_server, sync_addr) = start_ws_server();
+        let (mut async_server, async_addr) = start_ws_server();
 
-        Box::new(
-            server
-                .incoming()
-                .map_err(|websocket::server::InvalidConnection { error, .. }| {
-                    println!("Error: {}", error)
-                })
-                .for_each(move |(upgrade, addr)| {
-                    let desc = format!("Client {}", addr);
-                    let desc2 = desc.clone();
-                    upgrade
-                        .accept()
-                        .and_then(move |(mut client, _)| {
-                            let message_stream = unsafe {
-                                stream::iter((*initial_commands).iter().map(|command| {
-                                    Ok(websocket::OwnedMessage::Text(command.clone())) as
-                                        Result<_, io::Error>
-                                }))
-                            };
-                            client.send_all(message_stream).map(
-                                move |(client, _)| unsafe {
-                                    (*clients).push(client);
-                                },
-                            )
-                        })
-                        .map_err(move |e| println!("{}: '{:?}'", desc, e))
-                        .map(move |_| println!("{}: Finished.", desc2))
-                }),
-        )
-    }
-}
+        let html = make_html(sync_addr, async_addr);
+        http_server::start(config.http_addr, html);
 
-impl JsonSender for WebCanvas {
-    fn cleared(&mut self) {
-        unsafe {
-            (*self.initial_commands).clear();
-        }
+        let (sync_tx, rx) = std::sync::mpsc::channel();
+
+        let (mut client, ip) = accept_one(sync_server);
+	println!("Connection from {}", ip);
+
+        thread::spawn(move || {
+            for action in rx.iter() {
+                match action {
+                    Action::Send(text) => {
+                        let start = std::time::Instant::now();
+                        client.send_message(&OwnedMessage::Text(text)).unwrap();
+                        let end = std::time::Instant::now();
+                        let dur = end.duration_since(start);
+                        println!("Send took {:?}", dur);
+                    },
+                    Action::Receive(response_tx) => {
+                        client.set_nodelay(true).unwrap();
+                        let start = std::time::Instant::now();
+                        match client.recv_message() {
+                            Ok(OwnedMessage::Text(text)) => match response_tx.send(text) {
+                                Ok(_) => (),
+                                Err(e) => println!("Error when sending response from websocket thread: {}", e)
+                            },
+                            _ => (),
+                        };
+
+                        let end = std::time::Instant::now();
+                        let dur = end.duration_since(start);
+                        println!("Receive took {:?}", dur);
+                        client.set_nodelay(false).unwrap();
+                    },
+                }
+            }
+        });
+
+        let (mut aclient, _) = accept_one(async_server);
+        thread::spawn(move || {
+            for message in aclient.incoming_messages() {
+                match message {
+                    Ok(OwnedMessage::Text(text)) => {
+                        println!("Received event: {}", text);
+                    },
+                    _ => (),
+                }
+            }
+        });
+
+        WebCanvas { sync_tx }
     }
     fn send_json(&mut self, json: String) {
-        unsafe {
-            let clients = self.clients;
-            for i in 0..(*clients).len() {
-                (*clients)[i]
-                    .start_send(websocket::OwnedMessage::Text(json.clone()))
-                    .unwrap();
-                (*clients)[i].poll_complete();
-            }
-            (*self.initial_commands).push(json);
-        }
+        self.sync_tx.send(Action::Send(json));
     }
-    fn measure_text(&mut self, text: &str) -> BoxFuture<TextMetrics, ()> {
-        let cmd = format!("[\"measureText\", \"{}\"]", text);
-        unsafe {
-            println!("Requesting measure text...");
-            (*self.clients)[0]
-                .start_send(websocket::OwnedMessage::Text(cmd))
-                .unwrap();
-            (*self.clients)[0].poll_complete();
-            (*self.clients)[0]
-                .by_ref()
-                //.take(1)
-                .map(|v| {
-                    println!("Received: {:?}", v);
-                })
-                .poll();
-        }
-        futures::future::ok(TextMetrics { width: 10.0 }).boxed()
+    fn receive_json(&mut self) -> Receiver<String> {
+        let (tx, rx) = mpsc::channel();
+        self.sync_tx.send(Action::Receive(tx));
+        return rx;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio_core::reactor::Core;
 
     #[test]
     fn it_works() {
-        let mut core = Core::new().unwrap();
-        let handle = core.handle();
-        let mut canvas = WebCanvas::new(Config::default());
-        let future = canvas.start(&handle);
-
-        let timeout = tokio_core::reactor::Timeout::new(std::time::Duration::new(5, 0), &handle)
-            .unwrap()
-            .then(|x| {
-                canvas.clearRect(0., 0., 30., 30.);
-                canvas.fillStyle("white");
-                canvas.beginPath();
-                canvas.rect(50., 100., 200., 100.);
-                canvas.fill();
-                canvas.textAlign(TextAlignment::Center);
-                canvas.measureText("text");
-                return x;
-            })
-            .map_err(|_| ());
-        core.run(future.join(timeout)).unwrap();
+        let mut canvas = WebCanvas::start(Config::default());
+        canvas.clearRect(0., 0., 30., 30.);
+        canvas.fillStyle("white");
+        canvas.beginPath();
+        canvas.rect(50., 100., 200., 100.);
+        canvas.fill();
+        canvas.textAlign(TextAlignment::Center);
+        for i in 1..100 {
+            let metrics = canvas.measureText("text").next().unwrap();
+        }
+        canvas.fillRect(0., 0., 30., 30.);
+        canvas.beginPath();
+        canvas.rect(50., 100., 200., 100.);
+        canvas.fill();
     }
 }

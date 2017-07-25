@@ -5,7 +5,8 @@ document.body.style.overflow = 'hidden';
 //       var offscreen = canvas.transferControlToOffscreen();
 var canvas = document.getElementById('canvas');
 var ctx = canvas.getContext("2d", {"alpha": false});
-var socket = undefined;
+var action_socket = undefined;
+var event_socket = undefined;
 var binds = [
   {"html": "onmousedown", "args": ["clientX", "clientY", "button"]},
   {"html": "onmousemove", "args": ["clientX", "clientY"]},
@@ -16,18 +17,28 @@ var binds = [
   {"html": "oncontextmenu"},
 ];
 
-function SocketMessage(e) {
+function WindowResize(e) {
+  canvas.width = innerWidth;
+  canvas.height = innerHeight;
+  //event_socket.send("resized " + innerWidth + " " + innerHeight);
+};
+
+window.onresize = WindowResize;
+window.onresize();
+
+function ActionMessage(e) {
   console.log("Received", e.data);
   var msg = JSON.parse(e.data);
   if (Array.isArray(msg)) {
     var command = msg[0];
       var args = msg.slice(1);
       if (command == 'measureText') {
-	  console.log('text measured');
+	  var start = performance.now();
 	  var w = ctx.measureText(args[0]).width;
-	  socket.send(JSON.stringify(["textWidth", w]));
+	  action_socket.send(w);
+	  var end = performance.now();
+	  console.log("Time taken to measure text: " + (end - start));
       }
-
     else if (typeof ctx[command] === 'function') {
       ctx[command].apply(ctx, args);
     } else {
@@ -37,8 +48,7 @@ function SocketMessage(e) {
     console.error("Message is not an array", msg);
   }
 };
-
-function Reconnect() {
+function ActionReconnect() {
   ctx.clearRect(0,0,canvas.width, canvas.height);
   ctx.save();
   ctx.fillStyle = 'white';
@@ -47,49 +57,53 @@ function Reconnect() {
   ctx.translate(canvas.width/2, canvas.height/2);
   ctx.fillText('Stopped', 0, 0);
   ctx.restore();
-  setTimeout(Connect, 1000);
+  setTimeout(ActionConnect, 1000);
 };
-
-function Connect() {
-  socket = new WebSocket("ws://localhost:8081/");
-  socket.onmessage = SocketMessage;
-  socket.onopen = SocketOpen;
-  socket.onerror = Reconnect;
-};
-
-function SocketClose() {
-  window.onresize = undefined;
-  binds.forEach(function(bind) { window[bind.html] = undefined; });
+function ActionClose() {
   Reconnect();
 };
-
-function WindowResize(e) {
-  socket.send(JSON.stringify(["size",innerWidth,innerHeight]));
-  canvas.width = innerWidth;
-  canvas.height = innerHeight;
-  // TODO: redraw the screen
+function ActionOpen(e) {
+  action_socket.onerror = undefined;
+  action_socket.onclose = ActionClose;
+};
+function ActionConnect() {
+  action_socket = new WebSocket("ws://localhost:" + action_port + "/");
+  action_socket.onmessage = ActionMessage;
+  action_socket.onopen = ActionOpen;
+  action_socket.onerror = ActionReconnect;
 };
 
-function Bind(bind) {
+ActionConnect();
+
+function EventBind(bind) {
   window[bind.html] = function(e) {
     if (typeof bind.args != "undefined") {
       var o = [bind.html];
       for (var i in bind.args) {
         o.push(e[bind.args[i]]);
       }
-      socket.send(JSON.stringify(o));
+      event_socketg.send(JSON.stringify(o));
     }
     e.preventDefault();
     return true;
   }
 };
-
-function SocketOpen(e) {
-  socket.onerror = undefined;
-  window.onresize = WindowResize;
-  window.onresize();
-  binds.forEach(Bind);
-  socket.onclose = SocketClose;
+function EventReconnect() {
+  setTimeout(EventConnect, 1000);
+};
+function EventClose() {
+  binds.forEach(function(bind) { window[bind.html] = undefined; });
+  EventReconnect();
+};
+function EventOpen(e) {
+  event_socket.onerror = undefined;
+  binds.forEach(EventBind);
+  event_socket.onclose = EventClose;
+};
+function EventConnect() {
+  action_socket = new WebSocket("ws://localhost:" + event_port + "/");
+  action_socket.onopen = EventOpen;
+  action_socket.onerror = EventReconnect;
 };
 
-Connect();
+EventConnect();
